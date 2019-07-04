@@ -100,8 +100,7 @@ class MyAnimeListWLF(WatchlistFlavorBase):
         logsess_id, sess_id = self._login_token.rsplit("/", 1)
 
         headers = {
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'Accept': '*/*',
+            'Content-Type': 'application/x-www-form-urlencoded',
             'Cookie': 'MALHLOGSESSID=%s; MALSESSIONID=%s; is_logged_in=1; anime_update_advanced=1' % (logsess_id, sess_id),
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 \Firefox/56.0',
             }
@@ -118,26 +117,43 @@ class MyAnimeListWLF(WatchlistFlavorBase):
 
     def watchlist_update(self, episode, kitsu_id):
         mal_id = self._kitsu_to_mal_id(kitsu_id)
-        result = self._get_request(self._to_url("anime/%s" % (mal_id)), headers=self.__headers())
+        session = requests.session()
+        url = self._to_url('ownlist/anime/%s/edit?hideLayout' % mal_id)
+        resp = session.head(url, headers=self.__headers())
+        if resp.status_code != 200:
+            url = self._to_url('ownlist/anime/add?selected_series_id=%s' % mal_id)
+
+        return lambda: self.__update_library(url, episode, mal_id, session)
+
+    def __update_library(self, url, episode, mal_id, session):
+        result = session.get(url, headers=self.__headers())
         soup = bs.BeautifulSoup(result.text, 'html.parser')
         csrf = soup.find("meta",  {"name":"csrf_token"})["content"]
-        match = soup.find('h2', {'class' : 'mt8'})
-        if match:
-            url = self._to_url("ownlist/anime/edit.json")
-        else:
-            url = self._to_url("ownlist/anime/add.json")
-
-        return lambda: self.__update_library(url, episode, mal_id, csrf)
-
-    def __update_library(self, url, episode, mal_id, csrf):
-        payload = {
-            "anime_id": int(mal_id),
-            "status": 1,
-            "num_watched_episodes": int(episode),
-            "csrf_token": csrf
+        data = {
+            'anime_id': int(mal_id),
+            'add_anime[status]': 1,
+            'add_anime[num_watched_episodes]': int(episode),
+            'add_anime[priority]': 0,
+            'add_anime[storage_value]': 0,
+            'add_anime[num_watched_times]': 0,
+            'add_anime[is_asked_to_discuss]': 0,
+            'add_anime[sns_post_type]': 0,
+            'submitIt': 0,
+            'csrf_token': csrf
             }
 
-        self._post_request(url, headers=self.__headers(), json=payload)
+        result = session.post(url, data=data, headers=self.__headers())
+        self.__update_status(result)
+
+    def __update_status(self, result):
+        import xbmcgui
+
+        update_status = 'Ep Update Failed'
+        if "Successfully" in result.text:
+            update_status = 'Ep Update Succeeded'
+
+        dialog = xbmcgui.Dialog()
+        dialog.notification(update_status, "")
 
     def __get_sort(self):
         sort_types = {
